@@ -31,7 +31,26 @@ icon: file-alt
 6. git push origin gh-pages
 
 
+## Markdown对表格的支持
+### 使用所见即所得编辑器 Mou
+假如你使用的是Mac OSX ，就可以使用[Mou](http://mouapp.com/)。
+其它平台类似Mou的软件
 
+### 使用在线编辑工具
+Markdown支持html，所以我们可以用html来写表格。但是......用html写表格，实在太麻烦了，这里有个简单的转换方法，
+举例，假设有这样一个表格，内容如下：
+
+时间 地点 人物
+3月5日 北京 姚明
+3月7日 上海 韩寒
+
+处理方法如下：
+
+从word或excel中复制表格
+
+打开[excel，markdown表格转换器](http://pressbin.com/tools/excel_to_html_table/index.html)
+
+贴上复制的文字，然后按convert，就会得到这个表格的代码.
 
 
 ###参考资料
