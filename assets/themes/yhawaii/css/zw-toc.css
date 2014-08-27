@@ -1,0 +1,43 @@
+#toc * {
+    font-size: 12px;
+}
+
+#toc { 
+    position : fixed;
+    top : 60px;
+    right : 20px;
+    padding: .5em 1em;
+    border: 1px outset #ddc;
+    border-radius:5px;
+
+    /* un-comment following line to enable resize TOC div by DND */
+    width: 180px;
+}
+
+.hideCls
+{
+	opacity:0.3;
+}
+
+.showCls
+{
+	opacity:1.0;
+}
+
+#toc ul { 
+    list-style : none;
+
+    /* fix it on webkit */
+    -webkit-padding-start: 0px;
+
+    /* fix it on Gecko */
+    padding-left : 0px;
+}
+
+#toc .h2 { padding-left : 0em; }
+#toc .h3 { padding-left : 1em; }
+#toc .h4 { padding-left : 2em; }
+#toc .h5 { padding-left : 3em; }
+#toc .h6 { padding-left : 4em; }
+
+#toc .bolder { font-weight: bolder; }

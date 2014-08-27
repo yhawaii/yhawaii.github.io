@@ -48,7 +48,8 @@ html, body, div.wrapper {
 /* 自定义高亮样式 */
 .highlight pre,code {
   font-size: 15px;
-  background-color: #002B36;
+  /*background-color: #002B36;*/
+  border: 1px solid #ddd;
   color:#93A1A1;
 }
 
