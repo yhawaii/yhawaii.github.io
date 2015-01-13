@@ -399,3 +399,12 @@ $root > lipo -create SQY/iOS/iphoneos/libGamePlusAPI.a SQY/iOS/iphonesimulator/l
 然后可以输入命令测试下是否成功 ：
 $root > lipo -info SQY/iOS/libGamePus.a 
 ```
+
+### Stack
+
+Stack可以把最近开启过的应用程序能够自动形成一个Stack出现在Dock上。这个Terminal command就是帮我们完成这件事。
+
+　　defaults write com.apple.dock persistent-others -array-add '{ "tile-data" = { "list-type" = 1; }; "tile-type" = "recents-tile"; }'
+
+　　在Terminal键入以上指令，按enter，然后再输入killall Dock，再按enter即可。
+
