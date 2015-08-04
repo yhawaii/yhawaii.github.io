@@ -10,6 +10,11 @@ icon: file-alt
 ---
 {% include site/setup %}
 
+## 精选主题
+
+* [painterlin](http://painterlin.com/)
+* [hackerxu.com](http://hackerxu.com/)
+
 ##1. ruby环境安装
 
 [天朝ruby源替换](http://ruby.taobao.org/)
