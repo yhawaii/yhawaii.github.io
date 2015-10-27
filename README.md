@@ -1,6 +1,6 @@
 # 个人博客
 
-[yhawaii](http://yhawaii.github.io)
+[yhawaii](http://static.yhawaii.net)
 
 个人博客，[转载自](https://github.com/codepiano/codepiano.github.com)请注明出处，保留所有权利。
 
