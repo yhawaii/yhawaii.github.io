@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>QR 文件扫描器</title>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%234a90d9' width='100' height='100' rx='20'/><text x='50' y='65' text-anchor='middle' font-size='50' fill='white'>QR</text></svg>">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: white;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            text-align: center;
+            padding: 20px 0;
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .subtitle {
+            font-size: 14px;
+            color: #888;
+            margin-top: 5px;
+        }
+
+        /* 错误提示 */
+        .error-card {
+            background: rgba(255, 100, 100, 0.1);
+            border: 1px solid rgba(255, 100, 100, 0.3);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        .error-card h3 {
+            color: #ff6b6b;
+            margin-bottom: 15px;
+        }
+
+        .error-card p {
+            color: #aaa;
+            line-height: 1.6;
+            margin: 10px 0;
+        }
+
+        .error-card .solution {
+            background: rgba(74, 144, 217, 0.2);
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 15px;
+        }
+
+        .error-card .solution h4 {
+            color: #4a90d9;
+            margin-bottom: 10px;
+        }
+
+        .error-card ol {
+            padding-left: 20px;
+            line-height: 1.8;
+        }
+
+        .error-card code {
+            background: rgba(0,0,0,0.3);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        /* 扫描区域 */
+        .scanner-area {
+            position: relative;
+            width: 100%;
+            max-width: 350px;
+            margin: 20px auto;
+            aspect-ratio: 1;
+            border-radius: 20px;
+            overflow: hidden;
+            background: #000;
+        }
+
+        #video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        #canvas {
+            display: none;
+        }
+
+        .scanner-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            pointer-events: none;
+        }
+
+        .scanner-frame {
+            position: absolute;
+            top: 10%;
+            left: 10%;
+            right: 10%;
+            bottom: 10%;
+            border: 3px solid #4a90d9;
+            border-radius: 15px;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+        }
+
+        .scan-line {
+            position: absolute;
+            left: 10%;
+            right: 10%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #4a90d9, transparent);
+            animation: scan 2s linear infinite;
+        }
+
+        @keyframes scan {
+            0% { top: 10%; }
+            50% { top: 90%; }
+            100% { top: 10%; }
+        }
+
+        /* 状态显示 */
+        .status-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 15px 20px;
+            margin: 20px 0;
+        }
+
+        .file-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .file-name {
+            font-weight: 600;
+            font-size: 16px;
+        }
+
+        .file-size {
+            color: #888;
+            font-size: 14px;
+        }
+
+        /* 进度条 */
+        .progress-container {
+            margin-top: 10px;
+        }
+
+        .progress-bar {
+            height: 8px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4a90d9, #67b26f);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 8px;
+            font-size: 14px;
+            color: #888;
+        }
+
+        /* 块状态网格 */
+        .chunks-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(20px, 1fr));
+            gap: 4px;
+            margin-top: 15px;
+            max-height: 100px;
+            overflow-y: auto;
+        }
+
+        .chunk-dot {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.2);
+            transition: background 0.2s;
+        }
+
+        .chunk-dot.received {
+            background: #67b26f;
+        }
+
+        .chunk-dot.current {
+            background: #4a90d9;
+            animation: pulse 0.5s ease infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* 按钮 */
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 15px;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin: 10px 0;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #4a90d9, #67b26f);
+            color: white;
+        }
+
+        .btn-primary:disabled {
+            background: #444;
+            color: #888;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        /* 消息提示 */
+        .toast {
+            position: fixed;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 25px;
+            font-size: 14px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            z-index: 1000;
+            max-width: 90%;
+            text-align: center;
+        }
+
+        .toast.show {
+            opacity: 1;
+        }
+
+        /* 完成状态 */
+        .complete-icon {
+            width: 80px;
+            height: 80px;
+            margin: 20px auto;
+            background: linear-gradient(135deg, #4a90d9, #67b26f);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 40px;
+        }
+
+        .complete-message {
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        /* 使用说明 */
+        .instructions {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        .instructions h3 {
+            margin-bottom: 15px;
+            font-size: 16px;
+        }
+
+        .instructions ol {
+            padding-left: 20px;
+            line-height: 1.8;
+        }
+
+        .instructions li {
+            margin: 5px 0;
+            color: #aaa;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📱 QR 文件扫描器</h1>
+            <p class="subtitle">扫描二维码恢复文件</p>
+        </header>
+
+        <!-- 错误提示区域 -->
+        <div class="error-card" id="errorCard" style="display: none;">
+            <h3>⚠️ 无法访问摄像头</h3>
+            <p id="errorMessage"></p>
+            <div class="solution" id="solutionBox">
+                <h4>解决方案：</h4>
+                <ol id="solutionList"></ol>
+            </div>
+        </div>
+
+        <!-- 扫描区域 -->
+        <div class="scanner-area" id="scannerArea" style="display: none;">
+            <video id="video" playsinline></video>
+            <canvas id="canvas"></canvas>
+            <div class="scanner-overlay">
+                <div class="scanner-frame"></div>
+                <div class="scan-line" id="scanLine" style="display: none;"></div>
+            </div>
+        </div>
+
+        <!-- 开始按钮 -->
+        <button class="btn btn-primary" id="startBtn" onclick="checkAndStart()" style="display: none;">
+            🎥 开始扫描
+        </button>
+
+        <!-- 状态卡片 -->
+        <div class="status-card" id="statusCard" style="display: none;">
+            <div class="file-info">
+                <div>
+                    <div class="file-name" id="fileName">-</div>
+                    <div class="file-size" id="fileSize">-</div>
+                </div>
+                <div id="checksum" style="font-size: 12px; color: #888;"></div>
+            </div>
+
+            <div class="progress-container">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                </div>
+                <div class="progress-text">
+                    <span id="progressText">0 / 0 块</span>
+                    <span id="percentText">0%</span>
+                </div>
+            </div>
+
+            <div class="chunks-grid" id="chunksGrid"></div>
+        </div>
+
+        <!-- 完成状态 -->
+        <div id="completeSection" style="display: none;">
+            <div class="complete-icon">✓</div>
+            <div class="complete-message">
+                <h2>扫描完成！</h2>
+                <p id="completeInfo"></p>
+            </div>
+            <button class="btn btn-primary" id="downloadBtn" onclick="downloadFile()">
+                📥 下载文件
+            </button>
+            <button class="btn btn-secondary" onclick="resetScanner()">
+                🔄 重新扫描
+            </button>
+        </div>
+
+        <!-- 使用说明 -->
+        <div class="instructions" id="instructions">
+            <h3>📖 使用说明</h3>
+            <ol>
+                <li>点击「开始扫描」按钮</li>
+                <li>允许摄像头权限</li>
+                <li>将二维码对准扫描框</li>
+                <li>依次扫描所有二维码</li>
+                <li>完成后点击「下载文件」</li>
+            </ol>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <!-- jsQR 库 -->
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+
+    <script>
+        // 全局状态
+        let video = null;
+        let canvas = null;
+        let ctx = null;
+        let scanning = false;
+        let chunks = new Map();
+        let fileInfo = null;
+        let lastScanTime = 0;
+        let scanInterval = 100;
+
+        // 初始化 - 检查环境
+        document.addEventListener('DOMContentLoaded', () => {
+            video = document.getElementById('video');
+            canvas = document.getElementById('canvas');
+            ctx = canvas.getContext('2d');
+
+            checkEnvironment();
+        });
+
+        // 检查运行环境
+        function checkEnvironment() {
+            const isSecureContext = window.isSecureContext;
+            const isFileProtocol = window.location.protocol === 'file:';
+            const hasMediaDevices = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+            console.log('环境检测:', {
+                isSecureContext,
+                protocol: window.location.protocol,
+                hasMediaDevices,
+                isIOS
+            });
+
+            // 情况1: file:// 协议 - iOS 不支持
+            if (isFileProtocol && isIOS) {
+                showError(
+                    'iOS Safari 不允许本地文件访问摄像头',
+                    [
+                        '<strong>方案一（推荐）：</strong>通过 HTTPS 访问在线版本',
+                        '将此页面部署到 GitHub Pages 或任何 HTTPS 服务器',
+                        '',
+                        '<strong>方案二：</strong>通过本地服务器访问',
+                        '确保 iPhone 和 PC 在同一 WiFi，访问 http://PC的IP:8000/scanner.html',
+                        '',
+                        '<strong>方案三：</strong>使用第三方扫码 App',
+                        '用 iPhone 相机或微信扫码，将结果粘贴到下方输入框'
+                    ]
+                );
+                showManualInput();
+                return;
+            }
+
+            // 情况2: 非安全上下文（非 HTTPS/localhost）
+            if (!isSecureContext && !isFileProtocol) {
+                showError(
+                    '摄像头需要 HTTPS 或 localhost 环境',
+                    [
+                        '通过 HTTPS 服务器访问此页面',
+                        '或通过本地服务器 (http://localhost:xxxx) 访问'
+                    ]
+                );
+                return;
+            }
+
+            // 情况3: 浏览器不支持
+            if (!hasMediaDevices) {
+                showError(
+                    '浏览器不支持摄像头访问',
+                    [
+                        '请使用最新版 Safari、Chrome 或 Firefox',
+                        '确保浏览器有摄像头权限'
+                    ]
+                );
+                return;
+            }
+
+            // 环境正常，显示扫描界面
+            document.getElementById('scannerArea').style.display = 'block';
+            document.getElementById('startBtn').style.display = 'block';
+        }
+
+        // 显示错误
+        function showError(message, solutions) {
+            document.getElementById('errorCard').style.display = 'block';
+            document.getElementById('errorMessage').textContent = message;
+
+            const list = document.getElementById('solutionList');
+            list.innerHTML = solutions.map(s => `<li>${s}</li>`).join('');
+        }
+
+        // 显示手动输入区域
+        function showManualInput() {
+            const html = `
+                <div class="status-card" style="margin-top: 20px;">
+                    <h3 style="margin-bottom: 15px;">📝 手动输入模式</h3>
+                    <p style="color: #aaa; font-size: 14px; margin-bottom: 15px;">
+                        用其他 App 扫描二维码后，将内容粘贴到下方：
+                    </p>
+                    <textarea id="manualInput"
+                        style="width: 100%; height: 120px; background: #222; color: white;
+                               border: 1px solid #444; border-radius: 8px; padding: 10px;
+                               font-size: 12px; font-family: monospace;"
+                        placeholder='粘贴二维码内容，格式如：{"v":1,"seq":0,...}'></textarea>
+                    <button class="btn btn-primary" onclick="processManualInput()" style="margin-top: 10px;">
+                        处理输入
+                    </button>
+                </div>
+            `;
+            document.getElementById('instructions').insertAdjacentHTML('beforebegin', html);
+        }
+
+        // 处理手动输入
+        function processManualInput() {
+            const input = document.getElementById('manualInput').value.trim();
+            if (!input) {
+                showToast('请输入二维码内容');
+                return;
+            }
+            try {
+                processQRCode(input);
+                document.getElementById('manualInput').value = '';
+            } catch (err) {
+                showToast('格式错误: ' + err.message);
+            }
+        }
+
+        // 显示提示
+        function showToast(message, duration = 2000) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), duration);
+        }
+
+        // 检查并启动
+        function checkAndStart() {
+            startScanner();
+        }
+
+        // 启动扫描
+        async function startScanner() {
+            try {
+                // 请求摄像头权限
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'environment',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                });
+
+                video.srcObject = stream;
+                await video.play();
+
+                // 设置 canvas 大小
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+
+                scanning = true;
+                document.getElementById('startBtn').style.display = 'none';
+                document.getElementById('scanLine').style.display = 'block';
+                document.getElementById('instructions').style.display = 'none';
+
+                showToast('📷 扫描已启动');
+
+                scanLoop();
+
+            } catch (err) {
+                console.error('摄像头错误:', err);
+
+                let msg = '无法访问摄像头';
+                if (err.name === 'NotAllowedError') {
+                    msg = '摄像头权限被拒绝，请在设置中允许';
+                } else if (err.name === 'NotFoundError') {
+                    msg = '未找到摄像头设备';
+                } else if (err.name === 'NotReadableError') {
+                    msg = '摄像头被其他应用占用';
+                }
+
+                showToast('❌ ' + msg);
+                showError(msg, [
+                    '检查浏览器摄像头权限设置',
+                    '确保没有其他应用占用摄像头',
+                    '尝试刷新页面后重试'
+                ]);
+            }
+        }
+
+        // 扫描循环
+        function scanLoop() {
+            if (!scanning) return;
+
+            const now = Date.now();
+            if (now - lastScanTime >= scanInterval) {
+                lastScanTime = now;
+                scanFrame();
+            }
+
+            requestAnimationFrame(scanLoop);
+        }
+
+        // 扫描一帧
+        function scanFrame() {
+            if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+            const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                inversionAttempts: 'dontInvert'
+            });
+
+            if (code) {
+                processQRCode(code.data);
+            }
+        }
+
+        // 处理二维码数据
+        function processQRCode(data) {
+            try {
+                const qrData = JSON.parse(data);
+
+                if (qrData.v !== 1) {
+                    showToast('⚠️ 不支持的版本');
+                    return;
+                }
+
+                const { seq, total, name, size, hash, data: chunkData } = qrData;
+
+                if (!fileInfo) {
+                    fileInfo = { total, name, size, hash };
+                    initStatusUI();
+                }
+
+                if (chunks.has(seq)) {
+                    return;
+                }
+
+                chunks.set(seq, chunkData);
+                updateStatusUI(seq);
+
+                showToast(`✓ 块 ${seq + 1}/${total}`);
+                vibrate();
+
+                if (chunks.size === total) {
+                    completeScanning();
+                }
+
+            } catch (err) {
+                console.error('解析错误:', err);
+            }
+        }
+
+        // 初始化状态 UI
+        function initStatusUI() {
+            const statusCard = document.getElementById('statusCard');
+            statusCard.style.display = 'block';
+
+            document.getElementById('fileName').textContent = fileInfo.name;
+            document.getElementById('fileSize').textContent = formatSize(fileInfo.size);
+            document.getElementById('checksum').textContent = `SHA256: ${fileInfo.hash.slice(0, 8)}...`;
+
+            const grid = document.getElementById('chunksGrid');
+            grid.innerHTML = '';
+            for (let i = 0; i < fileInfo.total; i++) {
+                const dot = document.createElement('div');
+                dot.className = 'chunk-dot';
+                dot.id = `chunk-${i}`;
+                grid.appendChild(dot);
+            }
+
+            document.getElementById('progressText').textContent = `0 / ${fileInfo.total} 块`;
+        }
+
+        // 更新状态 UI
+        function updateStatusUI(seq) {
+            const dot = document.getElementById(`chunk-${seq}`);
+            if (dot) {
+                dot.classList.add('received');
+            }
+
+            const progress = chunks.size / fileInfo.total;
+            document.getElementById('progressFill').style.width = `${progress * 100}%`;
+            document.getElementById('progressText').textContent = `${chunks.size} / ${fileInfo.total} 块`;
+            document.getElementById('percentText').textContent = `${Math.round(progress * 100)}%`;
+        }
+
+        // 完成扫描
+        function completeScanning() {
+            scanning = false;
+            document.getElementById('scanLine').style.display = 'none';
+
+            const dataParts = [];
+            for (let i = 0; i < fileInfo.total; i++) {
+                dataParts.push(chunks.get(i));
+            }
+            const base64Data = dataParts.join('');
+
+            try {
+                const binaryString = atob(base64Data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+
+                computeSHA256(bytes).then(hash => {
+                    if (hash !== fileInfo.hash) {
+                        showToast('❌ 校验失败，请重新扫描');
+                        return;
+                    }
+
+                    window.fileData = bytes;
+
+                    document.getElementById('statusCard').style.display = 'none';
+                    document.getElementById('completeSection').style.display = 'block';
+                    document.getElementById('completeInfo').textContent =
+                        `${fileInfo.name} (${formatSize(fileInfo.size)})`;
+
+                    showToast('🎉 文件恢复成功！');
+                    vibrate([100, 50, 100]);
+                });
+
+            } catch (err) {
+                console.error('解码错误:', err);
+                showToast('❌ 文件解码失败');
+            }
+        }
+
+        // 下载文件
+        function downloadFile() {
+            if (!window.fileData || !fileInfo) return;
+
+            const blob = new Blob([window.fileData], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileInfo.name;
+            a.click();
+            URL.revokeObjectURL(url);
+
+            showToast('📥 下载已开始');
+        }
+
+        // 重置扫描器
+        function resetScanner() {
+            chunks.clear();
+            fileInfo = null;
+            window.fileData = null;
+
+            document.getElementById('statusCard').style.display = 'none';
+            document.getElementById('completeSection').style.display = 'none';
+            document.getElementById('startBtn').style.display = 'block';
+            document.getElementById('chunksGrid').innerHTML = '';
+            document.getElementById('instructions').style.display = 'block';
+
+            if (video && video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+
+            scanning = false;
+        }
+
+        // 格式化文件大小
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        // 计算 SHA256
+        async function computeSHA256(data) {
+            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        // 震动反馈
+        function vibrate(pattern = 50) {
+            if (navigator.vibrate) {
+                navigator.vibrate(pattern);
+            }
+        }
+    </script>
+</body>
+</html>
