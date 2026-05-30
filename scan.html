@@ -14,10 +14,35 @@
       >
         <div class="text-xl my-4">Data Receiver Mode</div>
         <div class="text-sm mb-4">{{user_message}}</div>
-        <div class="text-sm mb-4">
-          Progress: {{Object.keys(decoded_chunks).length}} /
-          {{file_metadata.chunks || 0}}
+
+        <!-- Progress display -->
+        <div v-if="metadata_initialized" class="text-sm mb-4">
+          <div>Progress: {{progress_text}}</div>
+          <div class="flex flex-wrap gap-1 mt-2 justify-center">
+            <span v-for="i in file_metadata.chunks" :key="i"
+                  :class="getChunkClass(i-1)"
+                  class="w-5 h-5 text-xs flex items-center justify-center rounded">
+            </span>
+          </div>
+          <div v-if="missing_text" class="text-xs mt-2 text-gray-500">
+            Missing: {{missing_text}}
+          </div>
         </div>
+
+        <!-- Validation result -->
+        <div v-if="validation_result" class="text-sm mb-4 p-2 border"
+             :class="validation_result.success ? 'border-green-500 bg-green-50' : 'border-red-500 bg-red-50'">
+          <div v-if="validation_result.success">
+            ✅ File received successfully!<br>
+            Name: {{validation_result.name}}<br>
+            Size: {{validation_result.size}} bytes<br>
+            Hash: {{validation_result.hash}}
+          </div>
+          <div v-else>
+            ❌ Error: {{validation_result.error}}
+          </div>
+        </div>
+
         <button
           v-if="!is_receiving"
           v-on:click="start_receiver"
@@ -45,13 +70,96 @@
         setup() {
           const user_message = ref("Click receive button to start receiving");
           const decoded_chunks = ref({});
-          const total_chunks = ref(-1);
           const file_metadata = reactive({});
           const is_receiving = ref(false);
+          const metadata_initialized = ref(false);
+          const protocol_version = ref(null);
+          const chunk_status = ref({});
+          const progress_text = ref("");
+          const validation_result = ref(null);
+          const missing_text = ref("");
           let canvas, context, videoElement;
 
-          const decode_data = (input_string) => {
-            const encoded_data = atob(input_string.split(",")[1]);
+          // CRC32 implementation
+          const makeCRCTable = () => {
+            let c, table = [];
+            for (let n = 0; n < 256; n++) {
+              c = n;
+              for (let k = 0; k < 8; k++) {
+                c = ((c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1));
+              }
+              table[n] = c;
+            }
+            return table;
+          };
+
+          let crc_table = null;
+          const crc32 = (data) => {
+            if (!crc_table) crc_table = makeCRCTable();
+            let crc = 0xFFFFFFFF;
+            for (let i = 0; i < data.length; i++) {
+              crc = (crc >>> 8) ^ crc_table[(crc ^ data[i]) & 0xFF];
+            }
+            return (crc ^ 0xFFFFFFFF) >>> 0;
+          };
+
+          const computeChunkChecksum = (chunk) => {
+            return crc32(chunk).toString(16).padStart(8, '0');
+          };
+
+          // Reliable metadata detection
+          const isMetadataFrame = (decoded_data) => {
+            try {
+              const parsed = JSON.parse(decoded_data);
+              // v2 format: has v field
+              if (parsed.v === 2 && parsed.name !== undefined && parsed.chunks !== undefined && parsed.hash !== undefined) {
+                return { isMetadata: true, version: 2, data: parsed };
+              }
+              // v1 format (legacy): has chunks but no v field
+              if (parsed.name !== undefined && parsed.chunks !== undefined && parsed.v === undefined) {
+                return { isMetadata: true, version: 1, data: parsed };
+              }
+            } catch (e) {
+              // Not valid JSON
+            }
+            return { isMetadata: false, version: null, data: null };
+          };
+
+          // Parse data frame with version detection
+          const parseDataFrame = (decoded_data) => {
+            // v2 format: "v2:index:checksum,base64_data"
+            if (decoded_data.startsWith("v2:")) {
+              const match = decoded_data.match(/^v2:(\d+):([0-9a-f]{8}),(.+)$/);
+              if (match) {
+                return {
+                  version: 2,
+                  index: parseInt(match[1]),
+                  checksum: match[2],
+                  base64Data: match[3]
+                };
+              }
+            }
+
+            // v1 format (legacy): "index,base64_data"
+            const commaIndex = decoded_data.indexOf(",");
+            if (commaIndex > 0) {
+              const indexPart = decoded_data.substring(0, commaIndex);
+              if (/^\d+$/.test(indexPart)) {
+                return {
+                  version: 1,
+                  index: parseInt(indexPart),
+                  checksum: null,
+                  base64Data: decoded_data.substring(commaIndex + 1)
+                };
+              }
+            }
+
+            return null;
+          };
+
+          // Decode base64 data to byte array
+          const decode_data = (base64_data) => {
+            const encoded_data = atob(base64_data);
             const encoded_array = Array.from(encoded_data, (char) =>
               char.charCodeAt(0)
             );
@@ -62,10 +170,41 @@
             const data_array = Array.from(output_string, (char) =>
               char.charCodeAt(0)
             );
-            return {
-              index: parseInt(input_string.split(",")[0]),
-              data: data_array,
-            };
+            return data_array;
+          };
+
+          // Validate chunk checksum (for v2 format)
+          const validateChunk = (data_array, expected_checksum) => {
+            const actual_checksum = computeChunkChecksum(data_array);
+            return actual_checksum === expected_checksum;
+          };
+
+          // Check if all chunks 0 to N-1 are present
+          const checkCompleteness = (chunks, total_chunks) => {
+            if (total_chunks <= 0) return false;
+            for (let i = 0; i < total_chunks; i++) {
+              if (!chunks.hasOwnProperty(i) || chunk_status.value[i] !== 'valid') {
+                return false;
+              }
+            }
+            return true;
+          };
+
+          // Get missing chunk indices for display
+          const getMissingChunks = (chunks, total_chunks) => {
+            const missing = [];
+            for (let i = 0; i < total_chunks; i++) {
+              if (!chunks.hasOwnProperty(i) || chunk_status.value[i] !== 'valid') {
+                missing.push(i);
+              }
+            }
+            return missing;
+          };
+
+          // Validate reconstructed file against expected hash
+          const validateFileHash = (inflated_data, expected_hash) => {
+            const actual_hash = crc32(inflated_data).toString(16).padStart(8, '0');
+            return actual_hash === expected_hash;
           };
 
           const download_file = (data, fileName) => {
@@ -78,23 +217,116 @@
             URL.revokeObjectURL(url);
           };
 
-          const stop_receiver = () => {
-            is_receiving.value = false;
+          const resetState = () => {
             decoded_chunks.value = {};
+            chunk_status.value = {};
             Object.assign(file_metadata, {});
+            metadata_initialized.value = false;
+            protocol_version.value = null;
+            progress_text.value = "";
+            missing_text.value = "";
+            validation_result.value = null;
             user_message.value = "Click receive button to start receiving";
           };
 
+          const stop_receiver = () => {
+            is_receiving.value = false;
+            resetState();
+          };
+
+          const updateProgressDisplay = () => {
+            const received = Object.keys(chunk_status.value).filter(
+              k => chunk_status.value[k] === 'valid'
+            ).length;
+            const total = file_metadata.chunks || 0;
+            const invalid = Object.keys(chunk_status.value).filter(
+              k => chunk_status.value[k] === 'invalid'
+            ).length;
+
+            progress_text.value = `${received}/${total} chunks received`;
+            if (invalid > 0) {
+              progress_text.value += ` (${invalid} invalid)`;
+            }
+
+            const missing = getMissingChunks(decoded_chunks.value, total);
+            if (missing.length > 0 && missing.length <= 20) {
+              missing_text.value = missing.join(", ");
+            } else if (missing.length > 20) {
+              missing_text.value = `${missing.length} chunks remaining`;
+            } else {
+              missing_text.value = "";
+            }
+          };
+
+          const getChunkClass = (index) => {
+            const status = chunk_status.value[index];
+            if (status === 'valid') return 'bg-green-500';
+            if (status === 'invalid') return 'bg-red-500';
+            return 'bg-gray-300';
+          };
+
+          const reconstructAndDownload = async () => {
+            user_message.value = "Reconstructing file...";
+
+            // Assemble chunks in order
+            let output_array = [];
+            for (let i = 0; i < file_metadata.chunks; i++) {
+              output_array = output_array.concat(decoded_chunks.value[i]);
+            }
+
+            let output_uint8array = Uint8Array.from(output_array);
+
+            // Decompress
+            let inflated_array;
+            try {
+              inflated_array = pako.inflate(output_uint8array);
+            } catch (e) {
+              user_message.value = "Error: Decompression failed";
+              validation_result.value = { success: false, error: "Decompression failed" };
+              return;
+            }
+
+            // Validate file hash (v2 protocol)
+            if (protocol_version.value === 2 && file_metadata.hash) {
+              if (!validateFileHash(inflated_array, file_metadata.hash)) {
+                user_message.value = "Error: File hash mismatch";
+                validation_result.value = { success: false, error: "Hash mismatch - file may be corrupted" };
+                return;
+              }
+            }
+
+            // Validate file size (v2 protocol)
+            if (protocol_version.value === 2 && file_metadata.size !== undefined) {
+              if (inflated_array.length !== file_metadata.size) {
+                user_message.value = "Error: File size mismatch";
+                validation_result.value = { success: false, error: `Size mismatch: expected ${file_metadata.size}, got ${inflated_array.length}` };
+                return;
+              }
+            }
+
+            // Success
+            user_message.value = "Transfer complete!";
+            validation_result.value = {
+              success: true,
+              name: file_metadata.name,
+              size: inflated_array.length,
+              hash: protocol_version.value === 2 ? file_metadata.hash : "N/A (v1 protocol)"
+            };
+
+            download_file(inflated_array, file_metadata.name);
+            is_receiving.value = false;
+          };
+
           const start_receiver = async () => {
-            decoded_chunks.value = {};
+            resetState();
             is_receiving.value = true;
-            while (
-              file_metadata.chunks != Object.keys(decoded_chunks.value).length
-            ) {
+            user_message.value = "Scanning for QR codes...";
+
+            while (is_receiving.value) {
               try {
                 await new Promise((r) => setTimeout(r, 10));
                 context.drawImage(videoElement, 0, 0);
-                image_data = context.getImageData(
+                let image_data = context.getImageData(
                   0,
                   0,
                   canvas.width,
@@ -104,36 +336,89 @@
                 if (!symbols || !symbols.length) {
                   continue;
                 }
-                let decoded_data = symbols[0].decode();
-                if (decoded_data.includes("chunks")) {
-                  Object.assign(file_metadata, JSON.parse(decoded_data));
-                  decoded_chunks.value = {};
-                  user_message.value = `Transferring file: ${file_metadata.name}`;
-                } else if (decoded_data.split(",").length == 2) {
-                  let raw_data = decode_data(decoded_data);
-                  decoded_chunks.value[raw_data["index"]] = raw_data["data"];
+
+                // Process all detected QR codes
+                for (let s = 0; s < symbols.length; s++) {
+                  let decoded_data = symbols[s].decode();
+
+                  // Try to parse as metadata frame
+                  const metaResult = isMetadataFrame(decoded_data);
+
+                  if (metaResult.isMetadata) {
+                    // Only reset if this is a different file
+                    const isNewFile = !metadata_initialized.value ||
+                      file_metadata.name !== metaResult.data.name ||
+                      (metaResult.data.hash && file_metadata.hash !== metaResult.data.hash);
+
+                    if (isNewFile) {
+                      decoded_chunks.value = {};
+                      chunk_status.value = {};
+                      Object.assign(file_metadata, metaResult.data);
+                      metadata_initialized.value = true;
+                      protocol_version.value = metaResult.version;
+                      user_message.value = `Receiving: ${file_metadata.name}`;
+                      updateProgressDisplay();
+                    }
+                    // Same file metadata: skip, don't clear progress
+                    continue;
+                  }
+
+                  // Try to parse as data frame
+                  const dataFrame = parseDataFrame(decoded_data);
+                  if (!dataFrame) continue;
+
+                  // Skip if metadata not initialized yet
+                  if (!metadata_initialized.value) continue;
+
+                  const { index, version, checksum, base64Data } = dataFrame;
+
+                  // Skip out-of-range chunks
+                  if (index < 0 || index >= file_metadata.chunks) continue;
+
+                  // Skip if already have valid chunk
+                  if (chunk_status.value[index] === 'valid') continue;
+
+                  // Decode the chunk data
+                  let data_array;
+                  try {
+                    data_array = decode_data(base64Data);
+                  } catch (e) {
+                    console.error(`Failed to decode chunk ${index}:`, e);
+                    chunk_status.value[index] = 'invalid';
+                    continue;
+                  }
+
+                  // Validate checksum for v2 protocol
+                  if (version === 2 && checksum) {
+                    if (validateChunk(data_array, checksum)) {
+                      decoded_chunks.value[index] = data_array;
+                      chunk_status.value[index] = 'valid';
+                    } else {
+                      console.warn(`Chunk ${index} checksum mismatch`);
+                      chunk_status.value[index] = 'invalid';
+                      // Keep scanning, will retry on next loop
+                    }
+                  } else {
+                    // v1 protocol - no checksum, trust the data
+                    decoded_chunks.value[index] = data_array;
+                    chunk_status.value[index] = 'valid';
+                  }
+
+                  updateProgressDisplay();
+
+                  // Check completeness
+                  if (checkCompleteness(decoded_chunks.value, file_metadata.chunks)) {
+                    await reconstructAndDownload();
+                    return;
+                  }
                 }
-                window.decoded_chunks = decoded_chunks.value;
               } catch (error) {
                 console.error("Error in Loop: ", error);
               }
-              if (!is_receiving.value) {
-                Object.assign(file_metadata, {});
-                decoded_chunks.value = {};
-                user_message.value = "Click receive button to start receiving";
-                return true;
-              }
             }
-            user_message.value = "Data Transfer Complete";
-            output_array = [];
-            for (let i = 0; i < file_metadata.chunks; i++) {
-              output_array = output_array.concat(decoded_chunks.value[i]);
-            }
-            let output_unit8array = Uint8Array.from(output_array);
-            window.output_unit8array = output_unit8array;
-            let infalted_array = pako.inflate(window.output_unit8array);
-            download_file(infalted_array, file_metadata.name);
-            stop_receiver();
+
+            // User stopped receiver
+            resetState();
           };
 
           onMounted(async () => {
@@ -157,6 +442,11 @@
             file_metadata,
             decoded_chunks,
             stop_receiver,
+            metadata_initialized,
+            progress_text,
+            missing_text,
+            validation_result,
+            getChunkClass,
           };
         },
       }).mount("#app");
