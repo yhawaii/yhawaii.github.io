@@ -167,20 +167,30 @@
             return null;
           };
 
-          // Decode base64 data to byte array
-          const decode_data = (base64_data) => {
+          // Decode base64 data to Uint8Array (v2: direct, no expansion)
+          const decode_data_v2 = (base64_data) => {
+            const binary_string = atob(base64_data);
+            const bytes = new Uint8Array(binary_string.length);
+            for (let i = 0; i < binary_string.length; i++) {
+              bytes[i] = binary_string.charCodeAt(i);
+            }
+            return bytes;
+          };
+
+          // Decode base64 data for v1 legacy format (with Latin1→UTF8 expansion)
+          const decode_data_v1 = (base64_data) => {
             const encoded_data = atob(base64_data);
-            const encoded_array = Array.from(encoded_data, (char) =>
-              char.charCodeAt(0)
-            );
+            const encoded_array = new Uint8Array(encoded_data.length);
+            for (let i = 0; i < encoded_data.length; i++) {
+              encoded_array[i] = encoded_data.charCodeAt(i);
+            }
             const utf8Decoder = new TextDecoder();
-            const output_string = utf8Decoder.decode(
-              new Uint8Array(encoded_array)
-            );
-            const data_array = Array.from(output_string, (char) =>
-              char.charCodeAt(0)
-            );
-            return data_array;
+            const output_string = utf8Decoder.decode(encoded_array);
+            const bytes = new Uint8Array(output_string.length);
+            for (let i = 0; i < output_string.length; i++) {
+              bytes[i] = output_string.charCodeAt(i);
+            }
+            return bytes;
           };
 
           // Validate chunk checksum (for v2 format)
@@ -278,13 +288,21 @@
           const reconstructAndDownload = async () => {
             user_message.value = "Reconstructing file...";
 
-            // Assemble chunks in order
-            let output_array = [];
+            // Calculate total size from metadata
+            const total_size = file_metadata.size || 0;
+
+            // Assemble chunks using pre-allocated Uint8Array (no concat)
+            let total_compressed_size = 0;
             for (let i = 0; i < file_metadata.chunks; i++) {
-              output_array = output_array.concat(decoded_chunks.value[i]);
+              total_compressed_size += decoded_chunks.value[i].length;
             }
 
-            let output_uint8array = Uint8Array.from(output_array);
+            let output_uint8array = new Uint8Array(total_compressed_size);
+            let offset = 0;
+            for (let i = 0; i < file_metadata.chunks; i++) {
+              output_uint8array.set(decoded_chunks.value[i], offset);
+              offset += decoded_chunks.value[i].length;
+            }
 
             // Decompress
             let inflated_array;
@@ -388,10 +406,14 @@
                   // Skip if already have valid chunk
                   if (chunk_status.value[index] === 'valid') continue;
 
-                  // Decode the chunk data
+                  // Decode the chunk data (use version-specific decoder)
                   let data_array;
                   try {
-                    data_array = decode_data(base64Data);
+                    if (version === 2) {
+                      data_array = decode_data_v2(base64Data);
+                    } else {
+                      data_array = decode_data_v1(base64Data);
+                    }
                   } catch (e) {
                     console.error(`Failed to decode chunk ${index}:`, e);
                     chunk_status.value[index] = 'invalid';
